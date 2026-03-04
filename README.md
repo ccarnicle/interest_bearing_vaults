@@ -1,6 +1,6 @@
 # aiSports EVM Escrow Contracts
 
-Smart contracts for **stablecoin-based fantasy sports contests** across multiple EVM networks (starting with **Arbitrum Sepolia**), designed to be consumed by the broader aiSports app.
+Smart contracts for **stablecoin-based fantasy sports contests** on Flow-EVM, designed to be consumed by the broader aiSports app.
 
 ## Overview
 
