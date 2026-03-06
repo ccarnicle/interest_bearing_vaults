@@ -1,73 +1,60 @@
-# aiSports EVM Escrow Contracts
+# aiSports Flow EVM Interest-Bearing Escrows
 
-Smart contracts for **stablecoin-based fantasy sports contests** on Flow-EVM, designed to be consumed by the broader aiSports app.
+Smart contracts for stablecoin-based DFS contests on **Flow EVM mainnet** with interest-bearing escrow support via **More.Markets (Aave-style Pool)**.
 
-## Overview
+## Current architecture
 
-The primary contract in this repo is **`DFSEscrowManager`** (`contracts/DFSEscrowManager.sol`). It manages:
+The primary contract is `contracts/DFSEscrowManager.sol`.
 
-- **Escrow creation** for a contest (organizer/authorized creator)
-- **Joining** an escrow with **multi-entry** support (up to `maxEntriesPerUser`, default 1000)
-- **Pool top-ups** (sponsors/organizer can add funds)
-- **Payout distribution** after the contest ends (organizer-triggered)
-- **Overflow handling** (any surplus funds go to an overflow recipient; defaults to organizer)
-- **Authorized creators**: the owner can whitelist which addresses are allowed to create escrows
+It supports:
 
-Funds are custody’d inside a **Yearn-style ERC-4626 vault per escrow**. On testnets (and networks without an official factory), the deployment uses `MockVaultFactory` / `MockYearnVault`.
+- escrow creation by authorized creators
+- multi-entry joins (`maxEntriesPerUser`, default `1000`)
+- sponsor/organizer pool top-ups via `addToPool`
+- optional yield mode per escrow (`pool != address(0)`) and no-yield mode (`pool == address(0)`)
+- explicit invest/unwind lifecycle:
+  - `investEscrowFunds`
+  - `withdrawEscrowFunds`
+- payout distribution with overflow routing
+- owner-managed pool/token allowlists and pause controls
 
-> Note: `EscrowManager.sol` remains in the repo as an earlier version; `DFSEscrowManager.sol` is the DFS-specific, current contract.
+`contracts/DFSEscrowManager_Yearn.sol` is kept as a legacy reference only.
 
-## What’s deployed
+## Flow EVM mainnet integration targets
 
-### Arbitrum Sepolia (live)
+- **Chain**: Flow EVM Mainnet (`chainId: 747`)
+- **Aave-style Pool proxy**: `0xbC92aaC2DBBF42215248B5688eB3D3d2b32F2c8d`
+- **stgUSDC (underlying asset)**: `0xf1815bd50389c46847f0bda824ec8da914045d14`
+- **aToken (aStgUSDC)**: `0x49c6b2799aF2Db7404b930F24471dD961CFE18b7`
 
-See `deployments/arbitrumSepolia.md` for the canonical addresses and verification commands.
-
-- **`DFSEscrowManager`**: `0x3819AC57110F008D491BBBba4fB14EcbFf45E5D0`
-- **`MockVaultFactory`**: `0x1dCE6e45eaf73B15E26139F365d4Bf622D69fff0`
-- **Official PYUSD (Arbitrum Sepolia)**: `0x637A1259C6afd7E3AdF63993cA7E58BB438aB1B1` (faucet-backed)
-
-To mint Arbitrum Sepolia PYUSD for testing, use the Paxos faucet at `https://faucet.paxos.com/`.
-
-## Supported networks (Hardhat)
-
-Configured in `hardhat.config.ts`:
-
-- **Flow EVM Testnet**: `flowTestnet` (chainId 545; explorer via FlowScan)
-- **Flow EVM Mainnet**: `flowMainnet` (chainId 747)
-- **Arbitrum Sepolia**: `arbitrumSepolia` (chainId 421614)
-- **Base Sepolia**: `baseSepolia` (chainId 84532)
-- **Mainnet placeholders**: `arbitrumOne` (42161), `base` (8453)
+These addresses are documented in `docs/aave_pool_integration_plan.md`.
 
 ## Project structure
 
-```
-aiSports_evm_escrow/
-├── contracts/
-│   ├── DFSEscrowManager.sol            # Primary contract (DFS + PYUSD 6-decimals + multi-entry)
-│   ├── EscrowManager.sol               # Legacy contract
-│   ├── MockToken.sol                   # Mock ERC20 used for local/tests
-│   ├── interfaces/
-│   │   ├── IERC4626.sol
-│   │   ├── IVaultFactory.sol
-│   │   └── IYearnVault.sol
-│   └── mocks/
-│       ├── MockVaultFactory.sol
-│       └── MockYearnVault.sol
-├── scripts/
-│   ├── deploy_dfs_escrow_manager.ts    # Deploy DFSEscrowManager (+ vault factory resolution)
-│   └── deploy.ts                       # Deploy legacy EscrowManager
-├── deployments/
-│   └── arbitrumSepolia.md              # Deployed addresses + verification commands
-├── test/
-│   ├── DFSEscrowManager.ts
-│   └── EscrowManager.ts
-└── hardhat.config.ts
+```text
+contracts/
+  DFSEscrowManager.sol
+  DFSEscrowManager_Yearn.sol          # legacy reference
+  EscrowManager.sol                   # legacy baseline
+  MockToken.sol
+  interfaces/
+    IPool.sol
+    IERC4626.sol
+    IVaultFactory.sol
+    IYearnVault.sol
+  mocks/
+    MockAavePool.sol
+    MockAToken.sol
+    MockVaultFactory.sol
+    MockYearnVault.sol
+test/
+  DFSEscrowManager.ts                 # Phase 1 Aave test strategy implemented
+  EscrowManager.ts                    # legacy contract tests
+docs/
+  aave_pool_integration_plan.md
 ```
 
 ## Setup
-
-Install:
 
 ```bash
 npm install
@@ -76,13 +63,13 @@ npm install
 Create `.env`:
 
 ```bash
-# Used for testnets (flowTestnet, arbitrumSepolia, baseSepolia)
+# Used for Flow testnet scripts
 DEPLOYER_PRIVATE_KEY=...
 
-# Used for mainnets/placeholders (flowMainnet, arbitrumOne, base)
+# Used for Flow mainnet scripts
 MAINNET_PRIVATE_KEY=...
 
-# Optional (contract verification). Hardhat is configured for Etherscan API v2.
+# Optional: verification API key used by Hardhat
 ETHERSCAN_API_KEY=...
 ```
 
@@ -94,58 +81,21 @@ npm run test
 npm run node
 ```
 
-## Deploy
-
-### Deploy `DFSEscrowManager` (recommended)
-
-Local:
+Run only DFS manager tests:
 
 ```bash
-npm run deploy:dfs:localhost
+npx hardhat test test/DFSEscrowManager.ts
 ```
 
-Flow:
+## Flow deployment notes
 
-```bash
-npm run deploy:dfs:testnet
-npm run deploy:dfs:mainnet
-```
-
-Arbitrum / Base:
-
-```bash
-npm run deploy:dfs:arbitrumSepolia
-npm run deploy:dfs:baseSepolia
-
-# Placeholders (addresses TBD)
-npm run deploy:dfs:arbitrumOne
-npm run deploy:dfs:base
-```
-
-The deploy script prints the values you’ll want to paste into your frontend/backend env vars (for example `NEXT_PUBLIC_EVM_ESCROW_ADDRESS_ARB_SEPOLIA`).
-
-### Deploy legacy `EscrowManager`
-
-```bash
-npm run deploy:flowTestnet
-npm run deploy:flowMainnet
-```
-
-## Verify contracts
-
-Arbitrum Sepolia verification commands are documented in `deployments/arbitrumSepolia.md`. Example:
-
-```bash
-# DFSEscrowManager (constructor arg: vaultFactoryAddress)
-npx hardhat verify --network arbitrumSepolia <DFSEscrowManager_ADDRESS> <vaultFactoryAddress>
-
-# MockVaultFactory (no constructor args)
-npx hardhat verify --network arbitrumSepolia <MockVaultFactory_ADDRESS>
-```
-
-## Integration notes (aiSports app)
-
-In the broader multi-chain aiSports system, each contest carries a `chain_network` (e.g. `"arbitrumSepolia"`, `"flowTestnet"`). The backend/frontend resolve the correct RPC + contract + token addresses from a per-network registry, so **multiple EVM networks can be supported at the same time**.
+- Deploy target is **Flow EVM mainnet**.
+- `DFSEscrowManager` currently has a no-arg constructor.
+- After deployment, owner should configure:
+  1. `setAllowedPool(<Flow Pool>, true)`
+  2. `setAllowedToken(<stgUSDC>, true)`
+  3. `setATokenForAsset(<stgUSDC>, <aStgUSDC>)`
+  4. `addAuthorizedCreator(<organizer/admin>)`
 
 ## License
 

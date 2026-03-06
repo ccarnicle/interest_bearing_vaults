@@ -5,7 +5,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IPool} from "./interfaces/IPool.sol";
+import {IVaultFactory} from "./interfaces/IVaultFactory.sol";
+import {IYearnVault} from "./interfaces/IYearnVault.sol";
 
 /**
  * @title DFSEscrowManager
@@ -22,7 +23,7 @@ import {IPool} from "./interfaces/IPool.sol";
  * The trust model assumes the organizer is responsible for triggering payouts correctly.
  * This contract is designed for standard ERC20 tokens and does not support fee-on-transfer or rebasing tokens.
  */
-contract DFSEscrowManager is ReentrancyGuard, Ownable {
+contract DFSEscrowManager_Yearn is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
     // --- Constants ---
@@ -33,6 +34,7 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     uint256 public constant MAX_PARTICIPANTS_CAP = 100_000; // Increased for DFS scale (from 10_000)
 
     // --- State Variables ---
+    address public immutable yearnVaultFactory;
     uint256 public nextEscrowId;
     
     // Multi-entry configuration
@@ -40,24 +42,6 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
 
     // Authorized creators whitelist
     mapping(address => bool) public authorizedCreators;
-    
-    // --- Allowlists ---
-    mapping(address => bool) public allowedPools;
-    mapping(address => bool) public allowedTokens;
-    
-    // --- aToken registry (owner-set, per underlying asset) ---
-    // Used for pro-rata yield calculation when multiple escrows are invested.
-    // For Flow mainnet stgUSDC: set to 0x49c6b2799aF2Db7404b930F24471dD961CFE18b7
-    mapping(address => address) public aTokenForAsset;
-    
-    // --- Global investment tracking ---
-    // Tracks the sum of principalInvested across all currently-invested escrows,
-    // grouped by underlying asset. Needed for pro-rata withdrawal calculation.
-    mapping(address => uint256) public totalPrincipalInPool;
-    
-    // --- Pause flags ---
-    bool public investPaused;
-    bool public withdrawPaused;
 
     // User-centric tracking
     mapping(address => uint256[]) public createdEscrows;
@@ -69,6 +53,7 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
 
     struct Escrow {
         address organizer;
+        IYearnVault yearnVault;
         IERC20 token;
         uint256 dues;
         uint256 endTime;
@@ -79,11 +64,6 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         uint256 activeArrayIndex;
         string leagueName;
         uint256 totalEntries; // Total entries across all users for this escrow
-        address pool; // Aave Pool address (address(0) = no-yield mode)
-        uint256 escrowBalance; // Tokens held by manager attributable to this escrow
-        bool invested; // Whether investEscrowFunds has been called
-        uint256 principalInvested; // Amount supplied to Aave
-        bool withdrawn; // Whether withdrawEscrowFunds has been called
     }
 
     mapping(uint256 => Escrow) public escrows;
@@ -96,7 +76,7 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     event EscrowCreated(
         uint256 indexed escrowId,
         address indexed organizer,
-        address pool,
+        address yearnVault,
         address indexed token,
         uint256 dues,
         uint256 endTime
@@ -115,13 +95,6 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     event OverflowRecipientSet(uint256 indexed escrowId, address indexed recipient);
 
     event PoolFunded(uint256 indexed escrowId, address indexed contributor, uint256 amount);
-    event EscrowInvested(uint256 indexed escrowId, address indexed pool, address indexed asset, uint256 amount);
-    event EscrowWithdrawn(uint256 indexed escrowId, address indexed pool, address indexed asset, uint256 amount);
-    event AllowedPoolUpdated(address indexed pool, bool allowed);
-    event AllowedTokenUpdated(address indexed token, bool allowed);
-    event ATokenSet(address indexed asset, address indexed aToken);
-    event InvestPauseUpdated(bool paused);
-    event WithdrawPauseUpdated(bool paused);
     
     event MaxEntriesPerUserUpdated(uint256 newMaxEntriesPerUser);
     
@@ -152,21 +125,10 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     error ExceedsMaxEntriesPerUser();
     error ExceedsMaxParticipants();
     error NotAuthorizedCreator();
-    error PoolNotAllowed();
-    error TokenNotAllowed();
-    error NoPoolConfigured();
-    error AlreadyInvested();
-    error NothingToInvest();
-    error NotInvested();
-    error AlreadyWithdrawn();
-    error MustWithdrawFirst();
-    error InvestPaused();
-    error WithdrawPaused();
-    error NotOrganizerOrOwner();
-    error InvalidAddress();
 
     // --- Constructor ---
-    constructor() Ownable(msg.sender) {
+    constructor(address _yearnVaultFactory) Ownable(msg.sender) {
+        yearnVaultFactory = _yearnVaultFactory;
         // Auto-authorize the owner to create escrows
         authorizedCreators[msg.sender] = true;
         emit AuthorizedCreatorAdded(msg.sender);
@@ -187,43 +149,67 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     // --- External Functions ---
 
     /**
-     * @notice Creates a new escrow with optional Aave pool integration.
-     * @dev If `_pool` is zero, escrow runs in no-yield mode; otherwise pool/token must be allowlisted.
+     * @notice Creates a new prize pool (escrow).
+     * @dev Deploys a new Yearn V3 Vault to hold the funds for this escrow.
+     * Note: For DFS, the organizer does NOT automatically join upon creation.
+     * @param _token The ERC20 token for the prize pool (typically PYUSD).
+     * @param _dues The amount required to join (in token's native decimals, e.g. 1e6 for PYUSD).
+     * @param _endTime The timestamp when the escrow closes for new participants.
+     * @param _vaultName The name for the new Yearn Vault.
+     * @param _maxParticipants The maximum number of entries allowed (interpreted as max entries, not unique wallets).
+     * @param _overflowRecipient Optional address to receive surplus funds. If zero, defaults to organizer.
      */
     function createEscrow(
         address _token,
         uint256 _dues,
         uint256 _endTime,
-        string calldata _leagueName,
+        string calldata _vaultName,
         uint256 _maxParticipants,
-        address _overflowRecipient,
-        address _pool
+        address _overflowRecipient
     ) external nonReentrant onlyAuthorizedCreator {
         if (_token == address(0)) revert InvalidToken();
         if (_dues < MINIMUM_DUES) revert InvalidDues();
-        if (bytes(_leagueName).length == 0) revert EmptyLeagueName();
-        if (bytes(_leagueName).length > MAX_LEAGUE_NAME_LENGTH) revert LeagueNameTooLong();
+        if (bytes(_vaultName).length == 0) revert EmptyLeagueName();
+        if (bytes(_vaultName).length > MAX_LEAGUE_NAME_LENGTH) revert LeagueNameTooLong();
         if (_endTime < block.timestamp + MINIMUM_ESCROW_DURATION) revert EndTimeTooSoon();
         if (_maxParticipants == 0 || _maxParticipants > MAX_PARTICIPANTS_CAP) revert InvalidMaxParticipants();
-        if (_pool != address(0) && !allowedPools[_pool]) revert PoolNotAllowed();
-        if (!allowedTokens[_token]) revert TokenNotAllowed();
 
         uint256 escrowId = nextEscrowId;
+
+        // Deploy a new Yearn vault for this escrow.
+        // The DFSEscrowManager will be the role_manager, giving it control over the vault.
+        // For simplicity, the vault symbol is derived from its name.
+        // Sanitize a symbol from the provided name: uppercase A-Z0-9 only, max 11 chars
+        string memory sanitizedSymbol = _sanitizeSymbol(_vaultName);
+
+        address newVaultAddress = IVaultFactory(yearnVaultFactory).deploy_new_vault(
+            _token,
+            _vaultName,
+            sanitizedSymbol,
+            address(this), // role_manager
+            0 // profit_max_unlock_time
+        );
+
+        // --- Configure the new vault ---
+        IYearnVault newVault = IYearnVault(newVaultAddress);
+
+        // As the role_manager, the DFSEscrowManager gives itself the DEPOSIT_LIMIT_MANAGER role.
+        // The role enum is: DEPOSIT_LIMIT_MANAGER = 2**8 = 256
+        newVault.set_role(address(this), 256);
+
+        // With the new role, it sets the deposit limit to be effectively infinite.
+        newVault.set_deposit_limit(type(uint256).max, true);
 
         // Store the new escrow's data.
         Escrow storage newEscrow = escrows[escrowId];
         newEscrow.organizer = msg.sender;
+        newEscrow.yearnVault = newVault;
         newEscrow.token = IERC20(_token);
         newEscrow.dues = _dues;
         newEscrow.endTime = _endTime;
         newEscrow.maxParticipants = _maxParticipants;
-        newEscrow.leagueName = _leagueName;
-        newEscrow.totalEntries = 0;
-        newEscrow.pool = _pool;
-        newEscrow.escrowBalance = 0;
-        newEscrow.invested = false;
-        newEscrow.principalInvested = 0;
-        newEscrow.withdrawn = false;
+        newEscrow.leagueName = _vaultName;
+        newEscrow.totalEntries = 0; // Initialize total entries to 0
 
         // Track the created escrow
         createdEscrows[msg.sender].push(escrowId);
@@ -241,7 +227,7 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         emit EscrowCreated(
             escrowId,
             msg.sender,
-            _pool,
+            newVaultAddress,
             _token,
             _dues,
             _endTime
@@ -251,9 +237,41 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         // Admin-created escrows start empty; users join by paying dues.
     }
 
+    // --- Internal Helpers ---
+    function _sanitizeSymbol(string memory name) internal pure returns (string memory) {
+        bytes memory src = bytes(name);
+        uint256 maxLen = 11;
+        bytes memory tmp = new bytes(maxLen);
+        uint256 len = 0;
+        for (uint256 i = 0; i < src.length && len < maxLen; i++) {
+            uint8 c = uint8(src[i]);
+            // convert lowercase to uppercase
+            if (c >= 97 && c <= 122) {
+                c = c - 32;
+            }
+            bool isAlpha = (c >= 65 && c <= 90); // A-Z
+            bool isDigit = (c >= 48 && c <= 57); // 0-9
+            if (isAlpha || isDigit) {
+                tmp[len] = bytes1(c);
+                len++;
+            }
+        }
+        if (len == 0) {
+            return "FV";
+        }
+        bytes memory out = new bytes(len);
+        for (uint256 j = 0; j < len; j++) {
+            out[j] = tmp[j];
+        }
+        return string(out);
+    }
+
     /**
-     * @notice Joins an escrow by purchasing one or more entries.
-     * @dev Collected dues stay in the manager and are tracked via `escrowBalance`.
+     * @notice Joins an existing prize pool with a specified number of entries.
+     * @dev Transfers `dues * numEntries` from the caller into the escrow's Yearn Vault.
+     * Supports multi-entry: users can join with multiple entries in a single transaction.
+     * @param _escrowId The ID of the escrow to join.
+     * @param _numEntries The number of entries to purchase (must be > 0).
      */
     function joinEscrow(uint256 _escrowId, uint256 _numEntries) external nonReentrant {
         if (_numEntries == 0) revert InvalidAmount();
@@ -288,8 +306,17 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         // Calculate total dues required
         uint256 totalDues = escrow.dues * _numEntries;
 
+        // The user must have approved this contract to spend their tokens.
+        // First, transfer the funds from the user to this DFSEscrowManager contract.
         escrow.token.safeTransferFrom(msg.sender, address(this), totalDues);
-        escrow.escrowBalance += totalDues;
+        
+        // Then, approve the Yearn vault to pull the funds from this contract.
+        escrow.token.forceApprove(address(escrow.yearnVault), 0);
+        escrow.token.forceApprove(address(escrow.yearnVault), totalDues);
+
+        // Finally, deposit the funds into the Yearn vault.
+        // The DFSEscrowManager contract receives the shares, acting as custodian for the participants.
+        escrow.yearnVault.deposit(totalDues, address(this));
 
         emit ParticipantJoined(_escrowId, msg.sender, _numEntries);
     }
@@ -325,90 +352,23 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         // Transfer funds from the sender to this contract
         escrow.token.safeTransferFrom(msg.sender, address(this), _amount);
 
-        escrow.escrowBalance += _amount;
+        // Approve the vault to spend the tokens
+        escrow.token.forceApprove(address(escrow.yearnVault), 0);
+        escrow.token.forceApprove(address(escrow.yearnVault), _amount);
+
+        // Deposit into the Yearn vault
+        escrow.yearnVault.deposit(_amount, address(this));
 
         emit PoolFunded(_escrowId, msg.sender, _amount);
     }
 
     /**
-     * @notice Supplies an escrow's manager-held balance into its configured Aave pool.
-     * @dev Callable by organizer or owner after entry closes; moves `escrowBalance` into principal tracking.
-     */
-    function investEscrowFunds(uint256 _escrowId) external nonReentrant {
-        if (investPaused) revert InvestPaused();
-        Escrow storage escrow = escrows[_escrowId];
-        if (msg.sender != escrow.organizer && msg.sender != owner()) revert NotOrganizerOrOwner();
-        if (block.timestamp <= escrow.endTime) revert EscrowNotEnded();
-        if (escrow.pool == address(0)) revert NoPoolConfigured();
-        if (escrow.invested) revert AlreadyInvested();
-        if (escrow.escrowBalance == 0) revert NothingToInvest();
-
-        uint256 amount = escrow.escrowBalance;
-        address asset = address(escrow.token);
-        address pool = escrow.pool;
-
-        // Effects
-        escrow.invested = true;
-        escrow.principalInvested = amount;
-        escrow.escrowBalance = 0;
-        totalPrincipalInPool[asset] += amount;
-
-        // Interactions
-        escrow.token.forceApprove(pool, amount);
-        IPool(pool).supply(asset, amount, address(this), 0);
-
-        emit EscrowInvested(_escrowId, pool, asset, amount);
-    }
-
-    /**
-     * @notice Withdraws an escrow's principal plus yield from Aave back into manager custody.
-     * @dev Uses pro-rata aToken share when multiple escrows are invested in the same asset.
-     */
-    function withdrawEscrowFunds(
-        uint256 _escrowId,
-        uint256 _minExpectedAssets
-    ) external nonReentrant {
-        if (withdrawPaused) revert WithdrawPaused();
-        Escrow storage escrow = escrows[_escrowId];
-        if (msg.sender != escrow.organizer && msg.sender != owner()) revert NotOrganizerOrOwner();
-        if (!escrow.invested) revert NotInvested();
-        if (escrow.withdrawn) revert AlreadyWithdrawn();
-
-        address asset = address(escrow.token);
-        address pool = escrow.pool;
-        address aToken = aTokenForAsset[asset];
-        uint256 principal = escrow.principalInvested;
-        uint256 totalPrincipal = totalPrincipalInPool[asset];
-
-        uint256 withdrawAmount;
-        if (totalPrincipal == principal) {
-            withdrawAmount = type(uint256).max;
-        } else {
-            uint256 aTokenBalance = IERC20(aToken).balanceOf(address(this));
-            withdrawAmount = (aTokenBalance * principal) / totalPrincipal;
-        }
-
-        // Effects
-        escrow.withdrawn = true;
-        totalPrincipalInPool[asset] -= principal;
-
-        // Interactions
-        uint256 balanceBefore = escrow.token.balanceOf(address(this));
-        IPool(pool).withdraw(asset, withdrawAmount, address(this));
-        uint256 actualWithdrawn = escrow.token.balanceOf(address(this)) - balanceBefore;
-
-        if (actualWithdrawn < _minExpectedAssets) {
-            revert InsufficientWithdrawn(actualWithdrawn, _minExpectedAssets);
-        }
-
-        escrow.escrowBalance += actualWithdrawn;
-
-        emit EscrowWithdrawn(_escrowId, pool, asset, actualWithdrawn);
-    }
-
-    /**
-     * @notice Pays winners and sends surplus (including yield) to the overflow recipient.
-     * @dev If escrow was invested, funds must be unwound first via `withdrawEscrowFunds`.
+     * @notice Distributes the winnings to the specified winners.
+     * @dev Can only be called by the organizer after the escrow has ended.
+     * Withdraws the total required amount from the Yearn Vault and distributes it.
+     * @param _escrowId The ID of the escrow to distribute.
+     * @param _winners An array of winner addresses.
+     * @param _amounts An array of amounts corresponding to each winner.
      */
     function distributeWinnings(
         uint256 _escrowId,
@@ -420,34 +380,41 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         if (msg.sender != escrow.organizer) revert NotOrganizer();
         if (block.timestamp < escrow.endTime) revert EscrowNotEnded();
         if (escrow.payoutsComplete) revert PayoutsAlreadyComplete();
-        if (escrow.invested && !escrow.withdrawn) revert MustWithdrawFirst();
         if (_winners.length > MAX_RECIPIENTS) revert TooManyRecipients();
         if (_winners.length != _amounts.length) revert PayoutArraysMismatch();
         
-        // Handle zero winners case: send all escrow balance to overflow recipient
+        // Handle zero winners case: withdraw all funds and send to overflow recipient
         if (_winners.length == 0) {
-            uint256 zeroWinnersOverflowAmount = escrow.escrowBalance;
+            uint256 maxWithdrawable = escrow.yearnVault.maxWithdraw(address(this));
             
             // Determine overflow recipient (defaults to organizer if not set)
-            address zeroWinnersOverflowTo = overflowRecipient[_escrowId];
-            if (zeroWinnersOverflowTo == address(0)) {
-                zeroWinnersOverflowTo = escrow.organizer;
+            address overflowTo = overflowRecipient[_escrowId];
+            if (overflowTo == address(0)) {
+                overflowTo = escrow.organizer;
             }
             
             // Mark payouts as complete
             escrow.payoutsComplete = true;
-            escrow.escrowBalance = 0;
             
             // O(1) removal from the active list
-            uint256 zeroWinnersIndexToRemove = escrow.activeArrayIndex;
-            uint256 zeroWinnersLastEscrowId = activeEscrowIds[activeEscrowIds.length - 1];
-            activeEscrowIds[zeroWinnersIndexToRemove] = zeroWinnersLastEscrowId;
-            escrows[zeroWinnersLastEscrowId].activeArrayIndex = zeroWinnersIndexToRemove;
+            uint256 indexToRemove = escrow.activeArrayIndex;
+            uint256 lastEscrowId = activeEscrowIds[activeEscrowIds.length - 1];
+            activeEscrowIds[indexToRemove] = lastEscrowId;
+            escrows[lastEscrowId].activeArrayIndex = indexToRemove;
             activeEscrowIds.pop();
             
-            emit WinningsDistributed(_escrowId, _winners, _amounts, zeroWinnersOverflowTo, zeroWinnersOverflowAmount);
-            if (zeroWinnersOverflowAmount > 0) {
-                escrow.token.safeTransfer(zeroWinnersOverflowTo, zeroWinnersOverflowAmount);
+            // Emit event with overflow info
+            emit WinningsDistributed(_escrowId, _winners, _amounts, overflowTo, 0);
+            
+            // Withdraw all funds and send to overflow recipient
+            if (maxWithdrawable > 0) {
+                uint256 balanceBefore = escrow.token.balanceOf(address(this));
+                escrow.yearnVault.withdraw(maxWithdrawable, address(this), address(this));
+                uint256 withdrawnAmount = escrow.token.balanceOf(address(this)) - balanceBefore;
+                
+                if (withdrawnAmount > 0) {
+                    escrow.token.safeTransfer(overflowTo, withdrawnAmount);
+                }
             }
             
             return;
@@ -473,8 +440,11 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
             totalPayout += _amounts[i];
         }
 
-        if (totalPayout > escrow.escrowBalance) {
-            revert InsufficientPool(totalPayout, escrow.escrowBalance);
+        uint256 maxWithdrawable = escrow.yearnVault.maxWithdraw(address(this));
+
+        // Require that total payout does not exceed max withdrawable
+        if (totalPayout > maxWithdrawable) {
+            revert InsufficientPool(totalPayout, maxWithdrawable);
         }
 
         // Determine overflow recipient (defaults to organizer if not set)
@@ -484,10 +454,8 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         }
 
         // --- EFFECTS (CEI) ---
-        uint256 overflowAmount = escrow.escrowBalance - totalPayout;
-        // Mark payouts as complete and zero this escrow's manager-held balance
+        // Mark payouts as complete
         escrow.payoutsComplete = true;
-        escrow.escrowBalance = 0;
 
         // O(1) removal from the active list
         uint256 indexToRemove = escrow.activeArrayIndex;
@@ -500,11 +468,27 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         activeEscrowIds.pop();
 
         // --- INTERACTIONS ---
-        for (uint256 i = 0; i < _winners.length; i++) {
-            uint256 amount = _amounts[i];
-            if (amount > 0) {
-                escrow.token.safeTransfer(_winners[i], amount);
+        uint256 overflowAmount = 0;
+        if (maxWithdrawable > 0) {
+            uint256 balanceBefore = escrow.token.balanceOf(address(this));
+            escrow.yearnVault.withdraw(maxWithdrawable, address(this), address(this));
+            uint256 withdrawnAmount = escrow.token.balanceOf(address(this)) - balanceBefore;
+
+            // Ensure we withdrew at least the required amount
+            if (withdrawnAmount < totalPayout) {
+                revert InsufficientWithdrawn(withdrawnAmount, totalPayout);
             }
+
+            // Distribute exact amounts to all winners
+            for (uint256 i = 0; i < _winners.length; i++) {
+                uint256 amount = _amounts[i];
+                if (amount > 0) {
+                    escrow.token.safeTransfer(_winners[i], amount);
+                }
+            }
+
+            // Calculate and transfer overflow to recipient
+            overflowAmount = withdrawnAmount - totalPayout;
         }
 
         // Emit the distribution event after interactions (includes overflow info)
@@ -525,49 +509,6 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         if (_newMaxEntriesPerUser == 0) revert InvalidMaxEntries();
         maxEntriesPerUser = _newMaxEntriesPerUser;
         emit MaxEntriesPerUserUpdated(_newMaxEntriesPerUser);
-    }
-
-    /**
-     * @notice Adds or removes an Aave pool from the allowlist.
-     */
-    function setAllowedPool(address _pool, bool _allowed) external onlyOwner {
-        if (_pool == address(0)) revert InvalidAddress();
-        allowedPools[_pool] = _allowed;
-        emit AllowedPoolUpdated(_pool, _allowed);
-    }
-
-    /**
-     * @notice Adds or removes an ERC20 asset from the allowlist.
-     */
-    function setAllowedToken(address _token, bool _allowed) external onlyOwner {
-        if (_token == address(0)) revert InvalidAddress();
-        allowedTokens[_token] = _allowed;
-        emit AllowedTokenUpdated(_token, _allowed);
-    }
-
-    /**
-     * @notice Sets the aToken contract used for pro-rata withdrawal accounting of an asset.
-     */
-    function setATokenForAsset(address _asset, address _aToken) external onlyOwner {
-        if (_asset == address(0)) revert InvalidAddress();
-        aTokenForAsset[_asset] = _aToken;
-        emit ATokenSet(_asset, _aToken);
-    }
-
-    /**
-     * @notice Pauses or unpauses `investEscrowFunds`.
-     */
-    function setInvestPaused(bool _paused) external onlyOwner {
-        investPaused = _paused;
-        emit InvestPauseUpdated(_paused);
-    }
-
-    /**
-     * @notice Pauses or unpauses `withdrawEscrowFunds`.
-     */
-    function setWithdrawPaused(bool _paused) external onlyOwner {
-        withdrawPaused = _paused;
-        emit WithdrawPauseUpdated(_paused);
     }
 
     /**
@@ -651,31 +592,23 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         view
         returns (
             address organizer,
-            address pool,
+            address yearnVault,
             address token,
             uint256 dues,
             uint256 endTime,
             string memory leagueName,
-            bool payoutsComplete,
-            uint256 escrowBalance,
-            bool invested,
-            uint256 principalInvested,
-            bool withdrawn
+            bool payoutsComplete
         )
     {
         Escrow storage escrow = escrows[_escrowId];
         return (
             escrow.organizer,
-            escrow.pool,
+            address(escrow.yearnVault),
             address(escrow.token),
             escrow.dues,
             escrow.endTime,
             escrow.leagueName,
-            escrow.payoutsComplete,
-            escrow.escrowBalance,
-            escrow.invested,
-            escrow.principalInvested,
-            escrow.withdrawn
+            escrow.payoutsComplete
         );
     }
     
