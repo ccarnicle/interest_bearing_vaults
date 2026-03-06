@@ -368,9 +368,56 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
         uint256 _escrowId,
         uint256 _minExpectedAssets
     ) external nonReentrant {
-        if (withdrawPaused) revert WithdrawPaused();
         Escrow storage escrow = escrows[_escrowId];
         if (msg.sender != escrow.organizer && msg.sender != owner()) revert NotOrganizerOrOwner();
+        _withdrawEscrowFunds(escrow, _escrowId, _minExpectedAssets);
+    }
+
+    /**
+     * @notice Pays winners and sends surplus (including yield) to the overflow recipient.
+     * @dev If escrow was invested, funds must be unwound first via `withdrawEscrowFunds`.
+     */
+    function distributeWinnings(
+        uint256 _escrowId,
+        address[] calldata _winners,
+        uint256[] calldata _amounts
+    ) external nonReentrant {
+        Escrow storage escrow = escrows[_escrowId];
+        if (msg.sender != escrow.organizer) revert NotOrganizer();
+        _distributeWinnings(escrow, _escrowId, _winners, _amounts);
+    }
+
+    /**
+     * @notice Optionally withdraws invested escrow funds, then distributes winnings in one call.
+     * @dev Organizer-only convenience entrypoint for end-of-escrow settlement.
+     * Works for both invested and non-invested escrows:
+     * - If invested and not withdrawn: withdraws first, then distributes
+     * - If not invested: skips withdraw and distributes directly
+     * This allows a single call path for all escrow types.
+     */
+    function divestAndDistributeWinnings(
+        uint256 _escrowId,
+        uint256 _minExpectedAssets,
+        address[] calldata _winners,
+        uint256[] calldata _amounts
+    ) external nonReentrant {
+        Escrow storage escrow = escrows[_escrowId];
+        if (msg.sender != escrow.organizer) revert NotOrganizer();
+        if (escrow.invested && !escrow.withdrawn) {
+            _withdrawEscrowFunds(escrow, _escrowId, _minExpectedAssets);
+        }
+        _distributeWinnings(escrow, _escrowId, _winners, _amounts);
+    }
+
+    /**
+     * @dev Shared withdrawal logic for `withdrawEscrowFunds` and combined settlement flows.
+     */
+    function _withdrawEscrowFunds(
+        Escrow storage escrow,
+        uint256 _escrowId,
+        uint256 _minExpectedAssets
+    ) internal {
+        if (withdrawPaused) revert WithdrawPaused();
         if (!escrow.invested) revert NotInvested();
         if (escrow.withdrawn) revert AlreadyWithdrawn();
 
@@ -407,17 +454,14 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Pays winners and sends surplus (including yield) to the overflow recipient.
-     * @dev If escrow was invested, funds must be unwound first via `withdrawEscrowFunds`.
+     * @dev Shared distribution logic for `distributeWinnings` and combined settlement flows.
      */
-    function distributeWinnings(
+    function _distributeWinnings(
+        Escrow storage escrow,
         uint256 _escrowId,
         address[] calldata _winners,
         uint256[] calldata _amounts
-    ) external nonReentrant {
-        Escrow storage escrow = escrows[_escrowId];
-
-        if (msg.sender != escrow.organizer) revert NotOrganizer();
+    ) internal {
         if (block.timestamp < escrow.endTime) revert EscrowNotEnded();
         if (escrow.payoutsComplete) revert PayoutsAlreadyComplete();
         if (escrow.invested && !escrow.withdrawn) revert MustWithdrawFirst();

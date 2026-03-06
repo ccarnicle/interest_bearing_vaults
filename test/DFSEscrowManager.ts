@@ -559,4 +559,164 @@ describe("DFSEscrowManager - Aave Phase 1", function () {
             expect(await fixture.mockToken.balanceOf(fixture.contributor.address)).to.equal(overflowBefore + usdc("112"));
         });
     });
+
+    describe("K) Combined divest + distribute", function () {
+        it("withdraws and distributes in one call for invested escrows", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, {
+                dues: usdc("50"),
+                overflowRecipient: fixture.contributor.address,
+            });
+            const manager = await fixture.dfsEscrowManager.getAddress();
+
+            for (const p of [fixture.participant1, fixture.participant2]) {
+                await fixture.mockToken.mint(p.address, usdc("50"));
+                await fixture.mockToken.connect(p).approve(manager, usdc("50"));
+                await fixture.dfsEscrowManager.connect(p).joinEscrow(1, 1);
+            }
+
+            await time.increaseTo(endTime + 1);
+            await fixture.dfsEscrowManager.connect(fixture.organizer).investEscrowFunds(1);
+
+            await fixture.mockToken.mint(fixture.poolAddress, usdc("10"));
+            await fixture.mockAavePool.simulateYield(fixture.tokenAddress, manager, usdc("10"));
+
+            const overflowBefore = await fixture.mockToken.balanceOf(fixture.contributor.address);
+            await expect(
+                fixture.dfsEscrowManager.connect(fixture.organizer).divestAndDistributeWinnings(
+                    1,
+                    usdc("110"),
+                    [fixture.participant1.address, fixture.participant2.address],
+                    [usdc("40"), usdc("60")]
+                )
+            )
+                .to.emit(fixture.dfsEscrowManager, "EscrowWithdrawn")
+                .and.to.emit(fixture.dfsEscrowManager, "WinningsDistributed");
+
+            const details = await fixture.dfsEscrowManager.getEscrowDetails(1);
+            expect(details.payoutsComplete).to.equal(true);
+            expect(details.escrowBalance).to.equal(0n);
+            expect(await fixture.mockToken.balanceOf(fixture.contributor.address)).to.equal(overflowBefore + usdc("10"));
+        });
+
+        it("distributes without withdraw for non-invested escrows", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { dues, endTime } = await createEscrow(fixture, {
+                pool: ethers.ZeroAddress,
+                dues: usdc("10"),
+                overflowRecipient: fixture.contributor.address,
+            });
+
+            await fixture.mockToken.mint(fixture.participant1.address, dues);
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), dues);
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+
+            await expect(
+                fixture.dfsEscrowManager.connect(fixture.organizer).divestAndDistributeWinnings(
+                    1,
+                    0,
+                    [fixture.participant1.address],
+                    [dues]
+                )
+            ).to.emit(fixture.dfsEscrowManager, "WinningsDistributed");
+
+            const details = await fixture.dfsEscrowManager.getEscrowDetails(1);
+            expect(details.payoutsComplete).to.equal(true);
+            expect(details.withdrawn).to.equal(false);
+        });
+
+        it("reverts when invested escrow cannot withdraw because withdrawPaused", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+            await fixture.dfsEscrowManager.connect(fixture.organizer).investEscrowFunds(1);
+            await fixture.dfsEscrowManager.connect(fixture.owner).setWithdrawPaused(true);
+
+            await expect(
+                fixture.dfsEscrowManager.connect(fixture.organizer).divestAndDistributeWinnings(
+                    1,
+                    0,
+                    [fixture.participant1.address],
+                    [usdc("10")]
+                )
+            ).to.be.revertedWithCustomError(fixture.dfsEscrowManager, "WithdrawPaused");
+        });
+
+        it("reverts when caller is not organizer", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { pool: ethers.ZeroAddress, dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+
+            await expect(
+                fixture.dfsEscrowManager.connect(fixture.outsider).divestAndDistributeWinnings(
+                    1,
+                    0,
+                    [fixture.participant1.address],
+                    [usdc("10")]
+                )
+            ).to.be.revertedWithCustomError(fixture.dfsEscrowManager, "NotOrganizer");
+        });
+
+        it("reverts when minExpectedAssets is too high in combined flow", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+            await fixture.dfsEscrowManager.connect(fixture.organizer).investEscrowFunds(1);
+
+            await expect(
+                fixture.dfsEscrowManager.connect(fixture.organizer).divestAndDistributeWinnings(
+                    1,
+                    usdc("11"),
+                    [fixture.participant1.address],
+                    [usdc("10")]
+                )
+            ).to.be.revertedWithCustomError(fixture.dfsEscrowManager, "InsufficientWithdrawn");
+        });
+
+        it("does not attempt a second withdraw when escrow is already withdrawn", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+
+            await fixture.dfsEscrowManager.connect(fixture.organizer).investEscrowFunds(1);
+            await fixture.dfsEscrowManager.connect(fixture.organizer).withdrawEscrowFunds(1, usdc("10"));
+
+            const tx = await fixture.dfsEscrowManager.connect(fixture.organizer).divestAndDistributeWinnings(
+                1,
+                usdc("999"),
+                [fixture.participant1.address],
+                [usdc("10")]
+            );
+            const receipt = await tx.wait();
+            expect(receipt).to.not.equal(null);
+
+            const events = receipt!.logs
+                .map((log) => {
+                    try {
+                        return fixture.dfsEscrowManager.interface.parseLog(log);
+                    } catch {
+                        return null;
+                    }
+                })
+                .filter((event) => event !== null);
+
+            const withdrawEvents = events.filter((event) => event!.name === "EscrowWithdrawn");
+            const distributeEvents = events.filter((event) => event!.name === "WinningsDistributed");
+            expect(withdrawEvents.length).to.equal(0);
+            expect(distributeEvents.length).to.equal(1);
+        });
+    });
 });
