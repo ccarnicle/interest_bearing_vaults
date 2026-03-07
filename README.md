@@ -97,6 +97,71 @@ npx hardhat test test/DFSEscrowManager.ts
   3. `setATokenForAsset(<stgUSDC>, <aStgUSDC>)`
   4. `addAuthorizedCreator(<organizer/admin>)`
 
+## Phase 2 Flow testnet scripts
+
+Two scripts implement the Phase 2 testnet plan in `docs/aave_pool_integration_plan.md`:
+
+- `scripts/deploy_dfs_escrow_manager_testnet.ts`
+  - Deploys `MockToken`, `MockAavePool`, `MockAToken`, and `DFSEscrowManager`
+  - Registers asset/aToken and configures pool/token/aToken allowlists on manager
+  - Authorizes organizer (`TESTNET_ORGANIZER_ADDRESS` or deployer by default)
+- `scripts/test_flow_testnet_lifecycle.ts`
+  - Runs an end-to-end lifecycle on Flow testnet and logs tx hashes for FlowScan
+  - Uses already deployed testnet addresses from `.env`
+- `scripts/test_flow_testnet_prepare.ts`
+  - Prepare script: mint, create escrow, join (no waiting/investing)
+  - Prints `TESTNET_ESCROW_ID` for later scripts
+- `scripts/test_flow_testnet_prepare_and_invest.ts`
+  - Full pre-end script: mint, create escrow, join, wait until endTime, then invest
+  - Alternative: use if you want to wait and invest in one go
+- `scripts/test_flow_testnet_invest_only.ts`
+  - Standalone invest script: checks endTime has passed, then invests
+  - Use this if you exited the prepare script early and want to invest later
+- `scripts/test_flow_testnet_withdraw_and_distribute.ts`
+  - Post-end script: simulate yield, withdraw, distribute, and print expected values for manual verification
+  - Uses 4 transactions (mint yield, simulate yield, withdraw, distribute)
+- `scripts/test_flow_testnet_settle_combined.ts`
+  - Post-end script: simulate yield, then combined withdraw+distribute in one transaction
+  - Uses 3 transactions (mint yield, simulate yield, divestAndDistributeWinnings)
+  - More gas-efficient option
+ 
+Run:
+
+```bash
+npm run deploy:dfs:testnet:phase2
+npm run test:flowTestnet:lifecycle
+# Recommended 3-step workflow:
+npm run test:flowTestnet:prepare      # Create escrow + join
+# Wait ~1 hour for endTime to pass
+npm run test:flowTestnet:invest       # Invest funds
+npm run test:flowTestnet:settle:combined  # Withdraw + distribute (1 tx)
+
+# Alternative workflows:
+npm run test:flowTestnet:prepare:full  # Prepare + wait + invest in one script
+npm run test:flowTestnet:settle        # Separate withdraw + distribute (2 txs)
+```
+
+Required `.env` values for lifecycle script:
+
+```bash
+TESTNET_MOCK_TOKEN_ADDRESS=0x...
+TESTNET_MOCK_ATOKEN_ADDRESS=0x...
+TESTNET_MOCK_AAVE_POOL_ADDRESS=0x...
+TESTNET_DFS_ESCROW_MANAGER_ADDRESS=0x...
+TESTNET_ESCROW_ID=1
+```
+
+Optional `.env` tuning for lifecycle script:
+
+```bash
+# Must be >= 3601 (MINIMUM_ESCROW_DURATION is 1 hour)
+TESTNET_END_DELAY_SECONDS=3665
+TESTNET_DUES_USDC=5
+TESTNET_ENTRY_COUNT=1
+TESTNET_YIELD_USDC=1
+TESTNET_WINNER_PAYOUT_USDC=5
+```
+
 ## License
 
 MIT
