@@ -44,6 +44,9 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     // --- Allowlists ---
     mapping(address => bool) public allowedPools;
     mapping(address => bool) public allowedTokens;
+
+    // --- Invest escrow caller allowlist (owner-managed; enables Flow scheduled tx / keepers) ---
+    mapping(address => bool) public investEscrowCallerAllowlist;
     
     // --- aToken registry (owner-set, per underlying asset) ---
     // Used for pro-rata yield calculation when multiple escrows are invested.
@@ -127,6 +130,8 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     
     event AuthorizedCreatorAdded(address indexed creator);
     event AuthorizedCreatorRemoved(address indexed creator);
+    event InvestEscrowCallerAdded(address indexed caller);
+    event InvestEscrowCallerRemoved(address indexed caller);
 
     // --- Errors ---
     error InvalidToken();
@@ -332,12 +337,13 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
 
     /**
      * @notice Supplies an escrow's manager-held balance into its configured Aave pool.
-     * @dev Callable by organizer or owner after entry closes; moves `escrowBalance` into principal tracking.
+     * @dev Callable by organizer, owner, or allowlisted caller after entry closes; moves `escrowBalance` into principal tracking.
      */
     function investEscrowFunds(uint256 _escrowId) external nonReentrant {
         if (investPaused) revert InvestPaused();
         Escrow storage escrow = escrows[_escrowId];
-        if (msg.sender != escrow.organizer && msg.sender != owner()) revert NotOrganizerOrOwner();
+        bool canInvest = msg.sender == escrow.organizer || msg.sender == owner() || investEscrowCallerAllowlist[msg.sender];
+        if (!canInvest) revert NotOrganizerOrOwner();
         if (block.timestamp <= escrow.endTime) revert EscrowNotEnded();
         if (escrow.pool == address(0)) revert NoPoolConfigured();
         if (escrow.invested) revert AlreadyInvested();
@@ -633,6 +639,28 @@ contract DFSEscrowManager is ReentrancyGuard, Ownable {
     function removeAuthorizedCreator(address _creator) external onlyOwner {
         authorizedCreators[_creator] = false;
         emit AuthorizedCreatorRemoved(_creator);
+    }
+
+    /**
+     * @notice Adds an address to the invest escrow caller allowlist.
+     * @dev Allowlisted addresses can call investEscrowFunds for any escrow (e.g., Flow scheduled tx, keeper bots).
+     * Can only be called by the contract owner.
+     * @param _caller The address to allow to call investEscrowFunds.
+     */
+    function addInvestEscrowCaller(address _caller) external onlyOwner {
+        if (_caller == address(0)) revert InvalidAddress();
+        investEscrowCallerAllowlist[_caller] = true;
+        emit InvestEscrowCallerAdded(_caller);
+    }
+
+    /**
+     * @notice Removes an address from the invest escrow caller allowlist.
+     * @dev Can only be called by the contract owner.
+     * @param _caller The address to remove from the allowlist.
+     */
+    function removeInvestEscrowCaller(address _caller) external onlyOwner {
+        investEscrowCallerAllowlist[_caller] = false;
+        emit InvestEscrowCallerRemoved(_caller);
     }
 
     // --- View Functions ---

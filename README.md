@@ -2,6 +2,22 @@
 
 Smart contracts for stablecoin-based DFS contests on **Flow EVM mainnet** with interest-bearing escrow support via **More.Markets (Aave-style Pool)**.
 
+## Hackathon highlights
+
+### Interest-bearing vaults
+
+Contest entry fees are deposited into **Aave-style lending pools** (More.Markets on Flow) instead of sitting idle. While participants compete, funds earn yield. At settlement, principal plus accrued interest is distributed to winners and overflow—no backend required.
+
+### Flow Scheduled Transactions
+
+**Automated investing** — When a contest ends, the contract owner can allowlist a Flow Scheduled Transaction address. That address can call `investEscrowFunds` to move contest funds into the pool and start earning yield automatically.
+
+- No Firebase backend or cron jobs needed
+- Scheduled transactions run on Flow natively at the specified time
+- Owner adds the scheduled-tx signer via `addInvestEscrowCaller`; organizer and owner can always invest manually
+
+Set `TESTNET_INVEST_CALLER_ADDRESS` at deploy time to allowlist the address that will execute scheduled invests. See [Flow Scheduled Transactions](https://developers.flow.com/blockchain-development-tutorials/forte/scheduled-transactions) for implementation details.
+
 ## Current architecture
 
 The primary contract is `contracts/DFSEscrowManager.sol`.
@@ -13,10 +29,10 @@ It supports:
 - sponsor/organizer pool top-ups via `addToPool`
 - optional yield mode per escrow (`pool != address(0)`) and no-yield mode (`pool == address(0)`)
 - explicit invest/unwind lifecycle:
-  - `investEscrowFunds`
+  - `investEscrowFunds` (organizer, owner, or allowlisted caller—e.g. Flow Scheduled Tx)
   - `withdrawEscrowFunds`
 - payout distribution with overflow routing
-- owner-managed pool/token allowlists and pause controls
+- owner-managed pool/token allowlists, invest-caller allowlist, and pause controls
 
 `contracts/DFSEscrowManager_Yearn.sol` is kept as a legacy reference only.
 
@@ -160,6 +176,9 @@ TESTNET_DUES_USDC=5
 TESTNET_ENTRY_COUNT=1
 TESTNET_YIELD_USDC=1
 TESTNET_WINNER_PAYOUT_USDC=5
+# Address allowed to call investEscrowFunds (e.g., Flow scheduled tx keeper)
+# If set at deploy time, added to allowlist; organizer/owner can always invest
+TESTNET_INVEST_CALLER_ADDRESS=0x...
 ```
 
 ## License

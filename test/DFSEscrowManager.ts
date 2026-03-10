@@ -299,6 +299,49 @@ describe("DFSEscrowManager - Aave Phase 1", function () {
             await expect(fixture.dfsEscrowManager.connect(fixture.outsider).investEscrowFunds(1))
                 .to.be.revertedWithCustomError(fixture.dfsEscrowManager, "NotOrganizerOrOwner");
         });
+
+        it("allowlisted caller can invest", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+
+            await fixture.dfsEscrowManager.connect(fixture.owner).addInvestEscrowCaller(fixture.outsider.address);
+            await fixture.dfsEscrowManager.connect(fixture.outsider).investEscrowFunds(1);
+
+            const details = await fixture.dfsEscrowManager.getEscrowDetails(1);
+            expect(details.invested).to.equal(true);
+            expect(details.principalInvested).to.equal(usdc("10"));
+            expect(details.escrowBalance).to.equal(0n);
+        });
+
+        it("owner can add and remove invest escrow caller", async function () {
+            const fixture = await loadFixture(deployFixture);
+            expect(await fixture.dfsEscrowManager.investEscrowCallerAllowlist(fixture.outsider.address)).to.equal(false);
+
+            await fixture.dfsEscrowManager.connect(fixture.owner).addInvestEscrowCaller(fixture.outsider.address);
+            expect(await fixture.dfsEscrowManager.investEscrowCallerAllowlist(fixture.outsider.address)).to.equal(true);
+
+            await fixture.dfsEscrowManager.connect(fixture.owner).removeInvestEscrowCaller(fixture.outsider.address);
+            expect(await fixture.dfsEscrowManager.investEscrowCallerAllowlist(fixture.outsider.address)).to.equal(false);
+        });
+
+        it("removed allowlist caller cannot invest", async function () {
+            const fixture = await loadFixture(deployFixture);
+            const { endTime } = await createEscrow(fixture, { dues: usdc("10") });
+            await fixture.mockToken.mint(fixture.participant1.address, usdc("10"));
+            await fixture.mockToken.connect(fixture.participant1).approve(await fixture.dfsEscrowManager.getAddress(), usdc("10"));
+            await fixture.dfsEscrowManager.connect(fixture.participant1).joinEscrow(1, 1);
+            await time.increaseTo(endTime + 1);
+
+            await fixture.dfsEscrowManager.connect(fixture.owner).addInvestEscrowCaller(fixture.outsider.address);
+            await fixture.dfsEscrowManager.connect(fixture.owner).removeInvestEscrowCaller(fixture.outsider.address);
+
+            await expect(fixture.dfsEscrowManager.connect(fixture.outsider).investEscrowFunds(1))
+                .to.be.revertedWithCustomError(fixture.dfsEscrowManager, "NotOrganizerOrOwner");
+        });
     });
 
     describe("E) Withdraw guards", function () {

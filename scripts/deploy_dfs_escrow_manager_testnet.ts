@@ -96,6 +96,16 @@ async function main() {
   const txCreator = await dfsEscrowManager.addAuthorizedCreator(organizerAddress);
   await txCreator.wait();
 
+  const investCallerAddress = process.env.TESTNET_INVEST_CALLER_ADDRESS?.trim();
+  if (investCallerAddress) {
+    const txInvestCaller = await dfsEscrowManager.addInvestEscrowCaller(investCallerAddress);
+    await txInvestCaller.wait();
+    console.log("\nInvest caller allowlisted:", investCallerAddress);
+    console.log("  addInvestEscrowCaller:", txInvestCaller.hash, flowscanTxUrl(txInvestCaller.hash));
+  } else {
+    console.log("\nNo TESTNET_INVEST_CALLER_ADDRESS set; organizer/owner can still call investEscrowFunds.");
+  }
+
   console.log("\nConfiguration txs:");
   console.log("  setAllowedPool:", txAllowedPool.hash, flowscanTxUrl(txAllowedPool.hash));
   console.log("  setAllowedToken:", txAllowedToken.hash, flowscanTxUrl(txAllowedToken.hash));
