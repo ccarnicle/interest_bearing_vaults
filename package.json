@@ -24,7 +24,8 @@
     "test:flowTestnet:invest": "hardhat run scripts/test_flow_testnet_invest_only.ts --network flowTestnet",
     "test:flowTestnet:settle": "hardhat run scripts/test_flow_testnet_withdraw_and_distribute.ts --network flowTestnet",
     "test:flowTestnet:settle:combined": "hardhat run scripts/test_flow_testnet_settle_combined.ts --network flowTestnet",
-    "test:flowTestnet:addInvestCaller": "hardhat run scripts/add_invest_escrow_caller.ts --network flowTestnet"
+    "test:flowTestnet:addInvestCaller": "hardhat run scripts/add_invest_escrow_caller.ts --network flowTestnet",
+    "mint:flowTestnet": "hardhat run scripts/mint_mock_token.ts --network flowTestnet"
   },
   "keywords": [
     "solidity",
