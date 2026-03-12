@@ -48,9 +48,17 @@ const config: HardhatUserConfig = {
     },
   },
   etherscan: {
-    // Single key = Etherscan API v2 (one key for all supported chains: Arbitrum, Base, etc.)
-    // Get from https://etherscan.io/myapikey
-    apiKey: process.env.ETHERSCAN_API_KEY || '',
+    // Network-keyed apiKey required so hardhat-verify uses customChains (BlockScout) for Flow
+    // instead of Etherscan v2 API (which errors: "Missing or unsupported chainid").
+    // FlowScan/BlockScout accepts any non-empty string for Flow networks.
+    apiKey: {
+      flowTestnet: 'flowscan',
+      flowMainnet: 'flowscan',
+      arbitrumSepolia: process.env.ETHERSCAN_API_KEY || '',
+      baseSepolia: process.env.ETHERSCAN_API_KEY || '',
+      arbitrumOne: process.env.ETHERSCAN_API_KEY || '',
+      base: process.env.ETHERSCAN_API_KEY || '',
+    },
     customChains: [
       {
         network: 'flowTestnet',
@@ -85,6 +93,9 @@ const config: HardhatUserConfig = {
         },
       },
     ],
+  },
+  sourcify: {
+    enabled: false,
   },
 };
 
