@@ -18,6 +18,25 @@ Contest entry fees are deposited into **Aave-style lending pools** (More.Markets
 
 Set `TESTNET_INVEST_CALLER_ADDRESS` at deploy time to allowlist the address that will execute scheduled invests. See [Flow Scheduled Transactions](https://developers.flow.com/blockchain-development-tutorials/forte/scheduled-transactions) for implementation details.
 
+### Cadence contracts for automated escrow investing
+
+This hackathon includes **Flow Cadence** contracts that automate `investEscrowFunds` on `DFSEscrowManager.sol` via cross-VM calls. The Cadence contracts run on Flow mainnet and use the **Flow Transaction Scheduler** to execute daily at a configured time (e.g., 8pm CST).
+
+**How it works:**
+
+1. **DFSEscrowInvestor** — A Cadence contract deployed at `0x254b32edc33e5bc3` (frontend-agent). It borrows the account's Cadence-Owned Account (COA) and:
+   - Calls `getActiveEscrowIds()` on the EVM `DFSEscrowManager` to fetch all non-completed escrow IDs
+   - For each ID, calls `investEscrowFunds(uint256)` on the EVM contract
+   - Skips failures (e.g., escrow not past endTime, already invested) and continues
+
+2. **DFSEscrowInvestorTransactionHandler** — Implements the Flow Transaction Scheduler interface. On each execution it runs `investActiveEscrows()` and reschedules itself for +24 hours.
+
+3. **DFSEscrowManager.sol** — The EVM contract's `investEscrowCallerAllowlist` must include the COA address (`0x0000000000000000000000021ef092c4a124ea6e`). Use `addInvestEscrowCaller` (owner-only) to add it. See `scripts/add_invest_caller_mainnet.ts`.
+
+The Cadence code lives in the `Cadence/` folder of this repo (display-only; deployments are done from the flow-cresendo repo).
+
+**Deployment address (Flow mainnet):** `0x254b32edc33e5bc3` (frontend-agent)
+
 ## Current architecture
 
 The primary contract is `contracts/DFSEscrowManager.sol`.
@@ -48,6 +67,17 @@ These addresses are documented in `docs/aave_pool_integration_plan.md`.
 ## Project structure
 
 ```text
+Cadence/                              # Flow Cadence contracts (hackathon; display-only)
+  contracts/
+    DFSEscrowInvestor.cdc
+    DFSEscrowInvestorTransactionHandler.cdc
+  transactions/
+    EVM/
+      investEscrowOnEvm.cdc
+      readActiveEscrowIdsFromEvm.cdc
+    EscrowInvestor/
+      InitDFSEscrowInvestorTransactionHandler.cdc
+      ScheduleDFSEscrowInvestor.cdc
 contracts/
   DFSEscrowManager.sol
   DFSEscrowManager_Yearn.sol          # legacy reference
