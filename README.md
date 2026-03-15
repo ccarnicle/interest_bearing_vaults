@@ -1,104 +1,100 @@
-# aiSports Flow EVM Interest-Bearing Escrows
+# aiSports — Consumer DeFi Daily Fantasy
 
-Smart contracts for stablecoin-based DFS contests on **Flow EVM mainnet** with interest-bearing escrow support via **More.Markets (Aave-style Pool)**.
+**aiSports** is a live NBA Daily Fantasy Sports platform on the Flow blockchain. Users draft 5-player rosters, compete on real-world NBA stats, and win crypto prizes. Entry is free or paid via **$JUICE** (our on-chain Flow token) and **stablecoins (USDC)**. The app supports both Flow/Cadence wallets and EVM wallets, with AI-generated NFT collectibles and a full in-game economy.
 
-## Hackathon highlights
+This repo contains the **hackathon additions** that transform aiSports from a Web3 DFS app into a full Consumer DeFi experience.
 
-### Interest-bearing vaults
+---
 
-Contest entry fees are deposited into **Aave-style lending pools** (More.Markets on Flow) instead of sitting idle. While participants compete, funds earn yield. At settlement, principal plus accrued interest is distributed to winners and overflow—no backend required.
+## Why Consumer DeFi?
 
-### Flow Scheduled Transactions
+Web2 fantasy platforms (FanDuel, DraftKings) are familiar to millions — but they extract value. aiSports meets users where they are: **familiar gameplay, USD entry, and social login** — then unlocks the power of DeFi underneath.
 
-**Automated investing** — When a contest ends, the contract owner can allowlist a Flow Scheduled Transaction address. That address can call `investEscrowFunds` to move contest funds into the pool and start earning yield automatically.
+| Web2 DFS | aiSports (Hackathon) |
+|---|---|
+| Idle entry fees | Entry fees earn yield via Aave |
+| Custodial accounts | Social login via Privy (non-custodial) |
+| Cron jobs & backends | Flow Scheduled Transactions (native) |
+| Fixed prize pools | Prize pools that grow from interest |
 
-- No Firebase backend or cron jobs needed
-- Scheduled transactions run on Flow natively at the specified time
-- Owner adds the scheduled-tx signer via `addInvestEscrowCaller`; organizer and owner can always invest manually
+Yield funds bigger prizes and supports the protocol — a clear differentiator no centralized site can offer.
 
-Set `TESTNET_INVEST_CALLER_ADDRESS` at deploy time to allowlist the address that will execute scheduled invests. See [Flow Scheduled Transactions](https://developers.flow.com/blockchain-development-tutorials/forte/scheduled-transactions) for implementation details.
+---
 
-### Cadence contracts for automated escrow investing
+## Hackathon Deliverables
 
-This hackathon includes **Flow Cadence** contracts that automate `investEscrowFunds` on `DFSEscrowManager.sol` via cross-VM calls. The Cadence contracts run on Flow mainnet and use the **Flow Transaction Scheduler** to execute daily at a configured time (e.g., 8pm CST).
+### 1. EVM Interest-Bearing Escrow — `DFSEscrowManager.sol`
 
-**How it works:**
+Contest entry fees are deposited into **More.Markets** (Aave-style pool on Flow EVM) instead of sitting idle. While participants compete, funds earn yield. At settlement, principal + accrued interest is distributed to winners — no backend required.
 
-1. **DFSEscrowInvestor** — A Cadence contract deployed at `0x254b32edc33e5bc3` (frontend-agent). It borrows the account's Cadence-Owned Account (COA) and:
-   - Calls `getActiveEscrowIds()` on the EVM `DFSEscrowManager` to fetch all non-completed escrow IDs
-   - For each ID, calls `investEscrowFunds(uint256)` on the EVM contract
-   - Skips failures (e.g., escrow not past endTime, already invested) and continues
+- Supports optional yield mode per escrow (`pool != address(0)`)
+- Explicit invest/unwind lifecycle: `investEscrowFunds` → `withdrawEscrowFunds` → `divestAndDistributeWinnings`
+- Owner-managed pool/token allowlists and pause controls
 
-2. **DFSEscrowInvestorTransactionHandler** — Implements the Flow Transaction Scheduler interface. On each execution it runs `investActiveEscrows()` and reschedules itself for +24 hours.
+**Flow EVM Mainnet targets:**
+| | Address |
+|---|---|
+| Chain | Flow EVM Mainnet (`chainId: 747`) |
+| DFSEscrowManager | `0x97a582e24B6a68a4D654421D46c89B9923F1Fd40` |
+| Aave Pool Proxy | `0xbC92aaC2DBBF42215248B5688eB3D3d2b32F2c8d` |
+| stgUSDC (asset) | `0xf1815bd50389c46847f0bda824ec8da914045d14` |
+| aStgUSDC (aToken) | `0x49c6b2799aF2Db7404b930F24471dD961CFE18b7` |
 
-3. **DFSEscrowManager.sol** — The EVM contract's `investEscrowCallerAllowlist` must include the COA address (`0x0000000000000000000000021ef092c4a124ea6e`). Use `addInvestEscrowCaller` (owner-only) to add it. See `scripts/add_invest_caller_mainnet.ts`.
+### 2. Stablecoin Entry
 
-The Cadence code lives in the `Cadence/` folder of this repo (display-only; deployments are done from the flow-cresendo repo).
+Contest entry fees denominated in **USDC** — lowering the barrier for users unfamiliar with native crypto tokens. USD-familiar entry is key to the consumer onboarding story.
 
-**Deployment address (Flow mainnet):** `0x254b32edc33e5bc3` (frontend-agent)
+### 3. Flow Scheduled Transactions (Automated Investing)
 
-## Current architecture
+No cron jobs. No Firebase. **Flow's native transaction scheduler** automates `investEscrowFunds` daily.
 
-The primary contract is `contracts/DFSEscrowManager.sol`.
+- **`DFSEscrowInvestor`** (Cadence) — borrowing the account's COA, calls `getActiveEscrowIds()` on the EVM contract and invests each eligible escrow.
+- **`DFSEscrowInvestorTransactionHandler`** — implements Flow's scheduler interface; executes and reschedules itself every 24 hours.
+- Deployed at `0x254b32edc33e5bc3` (Flow mainnet)
+- COA allowlisted via `addInvestEscrowCaller` on `DFSEscrowManager`
 
-It supports:
+### 4. Social Login via Privy
 
-- escrow creation by authorized creators
-- multi-entry joins (`maxEntriesPerUser`, default `1000`)
-- sponsor/organizer pool top-ups via `addToPool`
-- optional yield mode per escrow (`pool != address(0)`) and no-yield mode (`pool == address(0)`)
-- explicit invest/unwind lifecycle:
-  - `investEscrowFunds` (organizer, owner, or allowlisted caller—e.g. Flow Scheduled Tx)
-  - `withdrawEscrowFunds`
-- payout distribution with overflow routing
-- owner-managed pool/token allowlists, invest-caller allowlist, and pause controls
+Privy integration enables **email and social logins** — users get a non-custodial EVM wallet provisioned automatically. No seed phrases, no friction. This is the consumer on-ramp that bridges Web2 players into Web3 DeFi contests.
 
-`contracts/DFSEscrowManager_Yearn.sol` is kept as a legacy reference only.
+---
 
-## Flow EVM mainnet integration targets
+## Existing Platform (aiSports)
 
-- **Chain**: Flow EVM Mainnet (`chainId: 747`)
-- **Aave-style Pool proxy**: `0xbC92aaC2DBBF42215248B5688eB3D3d2b32F2c8d`
-- **stgUSDC (underlying asset)**: `0xf1815bd50389c46847f0bda824ec8da914045d14`
-- **aToken (aStgUSDC)**: `0x49c6b2799aF2Db7404b930F24471dD961CFE18b7`
+- **NBA DFS Contests** — free and paid daily fantays contest
+- **$JUICE Token** — on-chain Flow token for premium contest entry and NFT purchases
+- **AI-Generated NFTs** — unique collectibles using Stable Diffusion, purchasable with Juice
+- **Dual Wallet Support** — Flow/Cadence wallets and Dapper wallets
+- **AI Player Salaries** — Vertex AI calculates predictive fantasy scores per player
+- **Firebase Backend** — user profiles, in-game Juice balances, real-time contest data
 
-These addresses are documented in `docs/aave_pool_integration_plan.md`.
+---
 
-## Project structure
+## Project Structure
 
 ```text
-Cadence/                              # Flow Cadence contracts (hackathon; display-only)
+Cadence/
   contracts/
     DFSEscrowInvestor.cdc
     DFSEscrowInvestorTransactionHandler.cdc
   transactions/
-    EVM/
-      investEscrowOnEvm.cdc
-      readActiveEscrowIdsFromEvm.cdc
-    EscrowInvestor/
-      InitDFSEscrowInvestorTransactionHandler.cdc
-      ScheduleDFSEscrowInvestor.cdc
+    EVM/investEscrowOnEvm.cdc
+    EscrowInvestor/InitDFSEscrowInvestorTransactionHandler.cdc
 contracts/
-  DFSEscrowManager.sol
-  DFSEscrowManager_Yearn.sol          # legacy reference
-  EscrowManager.sol                   # legacy baseline
-  MockToken.sol
-  interfaces/
-    IPool.sol
-    IERC4626.sol
-    IVaultFactory.sol
-    IYearnVault.sol
-  mocks/
-    MockAavePool.sol
-    MockAToken.sol
-    MockVaultFactory.sol
-    MockYearnVault.sol
+  DFSEscrowManager.sol          # Primary hackathon contract
+  DFSEscrowManager_Yearn.sol    # Legacy reference
+  interfaces/  mocks/
+scripts/
+  deploy_dfs_escrow_manager_testnet.ts
+  test_flow_testnet_lifecycle.ts
+  add_invest_caller_mainnet.ts
 test/
-  DFSEscrowManager.ts                 # Phase 1 Aave test strategy implemented
-  EscrowManager.ts                    # legacy contract tests
+  DFSEscrowManager.ts
 docs/
   aave_pool_integration_plan.md
 ```
+
+---
 
 ## Setup
 
@@ -109,107 +105,38 @@ npm install
 Create `.env`:
 
 ```bash
-# Used for Flow testnet scripts
 DEPLOYER_PRIVATE_KEY=...
-
-# Used for Flow mainnet scripts
 MAINNET_PRIVATE_KEY=...
-
-# Optional: verification API key used by Hardhat
-ETHERSCAN_API_KEY=...
+ETHERSCAN_API_KEY=...         # optional, for verification
 ```
-
-## Common commands
 
 ```bash
 npm run compile
 npm run test
-npm run node
-```
-
-Run only DFS manager tests:
-
-```bash
 npx hardhat test test/DFSEscrowManager.ts
 ```
 
-## Flow deployment notes
+## Mainnet Post-Deploy Config
 
-- Deploy target is **Flow EVM mainnet**.
-- `DFSEscrowManager` currently has a no-arg constructor.
-- After deployment, owner should configure:
-  1. `setAllowedPool(<Flow Pool>, true)`
-  2. `setAllowedToken(<stgUSDC>, true)`
-  3. `setATokenForAsset(<stgUSDC>, <aStgUSDC>)`
-  4. `addAuthorizedCreator(<organizer/admin>)`
+```bash
+setAllowedPool(<Flow Pool>, true)
+setAllowedToken(<stgUSDC>, true)
+setATokenForAsset(<stgUSDC>, <aStgUSDC>)
+addAuthorizedCreator(<organizer>)
+addInvestEscrowCaller(<COA address>)    # allow scheduled tx to invest
+```
 
-## Phase 2 Flow testnet scripts
-
-Two scripts implement the Phase 2 testnet plan in `docs/aave_pool_integration_plan.md`:
-
-- `scripts/deploy_dfs_escrow_manager_testnet.ts`
-  - Deploys `MockToken`, `MockAavePool`, `MockAToken`, and `DFSEscrowManager`
-  - Registers asset/aToken and configures pool/token/aToken allowlists on manager
-  - Authorizes organizer (`TESTNET_ORGANIZER_ADDRESS` or deployer by default)
-- `scripts/test_flow_testnet_lifecycle.ts`
-  - Runs an end-to-end lifecycle on Flow testnet and logs tx hashes for FlowScan
-  - Uses already deployed testnet addresses from `.env`
-- `scripts/test_flow_testnet_prepare.ts`
-  - Prepare script: mint, create escrow, join (no waiting/investing)
-  - Prints `TESTNET_ESCROW_ID` for later scripts
-- `scripts/test_flow_testnet_prepare_and_invest.ts`
-  - Full pre-end script: mint, create escrow, join, wait until endTime, then invest
-  - Alternative: use if you want to wait and invest in one go
-- `scripts/test_flow_testnet_invest_only.ts`
-  - Standalone invest script: checks endTime has passed, then invests
-  - Use this if you exited the prepare script early and want to invest later
-- `scripts/test_flow_testnet_withdraw_and_distribute.ts`
-  - Post-end script: simulate yield, withdraw, distribute, and print expected values for manual verification
-  - Uses 4 transactions (mint yield, simulate yield, withdraw, distribute)
-- `scripts/test_flow_testnet_settle_combined.ts`
-  - Post-end script: simulate yield, then combined withdraw+distribute in one transaction
-  - Uses 3 transactions (mint yield, simulate yield, divestAndDistributeWinnings)
-  - More gas-efficient option
- 
-Run:
+## Testnet Workflow
 
 ```bash
 npm run deploy:dfs:testnet:phase2
-npm run test:flowTestnet:lifecycle
-# Recommended 3-step workflow:
-npm run test:flowTestnet:prepare      # Create escrow + join
-# Wait ~1 hour for endTime to pass
-npm run test:flowTestnet:invest       # Invest funds
-npm run test:flowTestnet:settle:combined  # Withdraw + distribute (1 tx)
-
-# Alternative workflows:
-npm run test:flowTestnet:prepare:full  # Prepare + wait + invest in one script
-npm run test:flowTestnet:settle        # Separate withdraw + distribute (2 txs)
+npm run test:flowTestnet:prepare        # create escrow + join
+# wait ~1 hour
+npm run test:flowTestnet:invest         # invest into pool
+npm run test:flowTestnet:settle:combined  # withdraw + distribute
 ```
 
-Required `.env` values for lifecycle script:
-
-```bash
-TESTNET_MOCK_TOKEN_ADDRESS=0x...
-TESTNET_MOCK_ATOKEN_ADDRESS=0x...
-TESTNET_MOCK_AAVE_POOL_ADDRESS=0x...
-TESTNET_DFS_ESCROW_MANAGER_ADDRESS=0x...
-TESTNET_ESCROW_ID=1
-```
-
-Optional `.env` tuning for lifecycle script:
-
-```bash
-# Must be >= 3601 (MINIMUM_ESCROW_DURATION is 1 hour)
-TESTNET_END_DELAY_SECONDS=3665
-TESTNET_DUES_USDC=5
-TESTNET_ENTRY_COUNT=1
-TESTNET_YIELD_USDC=1
-TESTNET_WINNER_PAYOUT_USDC=5
-# Address allowed to call investEscrowFunds (e.g., Flow scheduled tx keeper)
-# If set at deploy time, added to allowlist; organizer/owner can always invest
-TESTNET_INVEST_CALLER_ADDRESS=0x...
-```
+---
 
 ## License
 
