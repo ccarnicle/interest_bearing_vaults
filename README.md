@@ -52,8 +52,7 @@ No cron jobs. No Firebase. **Flow's native transaction scheduler** automates `in
 - **`DFSEscrowInvestorTransactionHandler`** — implements Flow's scheduler interface; executes and reschedules itself every 24 hours.
 - Deployed at `0x254b32edc33e5bc3` (Flow mainnet)
 - COA allowlisted via `addInvestEscrowCaller` on `DFSEscrowManager`
-
-**Hackathon / judges:** Scheduled and completed automation runs are visible on FlowScan — [DFSEscrowInvestorTransactionHandler → Scheduled tab](https://www.flowscan.io/contract/A.254b32edc33e5bc3.DFSEscrowInvestorTransactionHandler?tab=scheduled).
+- Scheduled and completed automation runs are visible on FlowScan — [DFSEscrowInvestorTransactionHandler → Scheduled tab](https://www.flowscan.io/contract/A.254b32edc33e5bc3.DFSEscrowInvestorTransactionHandler?tab=scheduled).
 
 ### 4. Social Login via Privy
 
