@@ -1,4 +1,4 @@
-# aiSports — Daily Fantasy Powered by Consumer DeFi
+# aiSports - Daily Fantasy Powered by Consumer DeFi
 
 **aiSports** is a live NBA Daily Fantasy Sports platform on the Flow blockchain. Users draft 5-player rosters, compete on real-world NBA stats, and win crypto prizes. Entry is free or paid via **$JUICE** (our on-chain Flow token) and **stablecoins (USDC)**. The app supports both Flow/Cadence wallets and EVM wallets, with AI-generated NFT collectibles and a full in-game economy.
 
