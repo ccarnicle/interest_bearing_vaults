@@ -1,4 +1,4 @@
-# aiSports — Consumer DeFi Daily Fantasy
+# aiSports — Daily Fantasy Powered by Consumer DeFi
 
 **aiSports** is a live NBA Daily Fantasy Sports platform on the Flow blockchain. Users draft 5-player rosters, compete on real-world NBA stats, and win crypto prizes. Entry is free or paid via **$JUICE** (our on-chain Flow token) and **stablecoins (USDC)**. The app supports both Flow/Cadence wallets and EVM wallets, with AI-generated NFT collectibles and a full in-game economy.
 
@@ -8,7 +8,7 @@ This repo contains the **hackathon additions** that transform aiSports from a We
 
 ## Why Consumer DeFi?
 
-Web2 fantasy platforms (FanDuel, DraftKings) are familiar to millions — but they extract value. aiSports meets users where they are: **familiar gameplay, USD entry, and social login** — then unlocks the power of DeFi underneath.
+Web2 fantasy platforms (FanDuel, DraftKings) are familiar to millions - but they extract value. aiSports meets users where they are: **familiar gameplay, USD entry, and social login** - then unlocks the power of DeFi underneath.
 
 | Web2 DFS | aiSports (Hackathon) |
 |---|---|
@@ -17,7 +17,7 @@ Web2 fantasy platforms (FanDuel, DraftKings) are familiar to millions — but th
 | Cron jobs & backends | Flow Scheduled Transactions (native) |
 | Fixed prize pools | Prize pools that grow from interest |
 
-Yield funds bigger prizes and supports the protocol — a clear differentiator no centralized site can offer.
+Yield funds bigger prizes and supports the protocol - a clear differentiator no centralized site can offer.
 
 ---
 
@@ -42,7 +42,7 @@ Contest entry fees are deposited into **More.Markets** (Aave-style pool on Flow 
 
 ### 2. Stablecoin Entry
 
-Contest entry fees denominated in **USDC** — lowering the barrier for users unfamiliar with native crypto tokens. USD-familiar entry is key to the consumer onboarding story.
+Contest entry fees denominated in **USDC** - lowering the barrier for users unfamiliar with native crypto tokens. USD-familiar entry is key to the consumer onboarding story.
 
 ### 3. Flow Scheduled Transactions (Automated Investing)
 
