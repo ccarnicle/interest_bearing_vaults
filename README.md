@@ -53,6 +53,8 @@ No cron jobs. No Firebase. **Flow's native transaction scheduler** automates `in
 - Deployed at `0x254b32edc33e5bc3` (Flow mainnet)
 - COA allowlisted via `addInvestEscrowCaller` on `DFSEscrowManager`
 
+**Hackathon / judges:** Scheduled and completed automation runs are visible on FlowScan — [DFSEscrowInvestorTransactionHandler → Scheduled tab](https://www.flowscan.io/contract/A.254b32edc33e5bc3.DFSEscrowInvestorTransactionHandler?tab=scheduled).
+
 ### 4. Social Login via Privy
 
 Privy integration enables **email and social logins** — users get a non-custodial EVM wallet provisioned automatically. No seed phrases, no friction. This is the consumer on-ramp that bridges Web2 players into Web3 DeFi contests.
